@@ -1,23 +1,23 @@
-using System.Collections.Generic;
 using System.IO;
+using System.Collections.Generic;
+using System.Collections;
+using UnityEngine;
+using System.Linq;
+using UnityStandardAssets.Characters.FirstPerson;
+using System;
+using MessagePack.Resolvers;
+using MessagePack.Formatters;
+using MessagePack;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
-using UnityEngine;
+using Newtonsoft.Json.Serialization;
 using Thor.Procedural;
 using Thor.Procedural.Data;
-using System.Collections;
+using UnityEngine.AI;
 using UnityEditor;
-using UnityEngine.SceneManagement;
-using EasyButtons;
-using System;
-using System.Linq;
-using System.IO;
-using Thor.Utils;
 using USD.NET;
 using Unity.Formats.USD;
 using TestPrefabExporter;
-
-
 public class JsonReader : MonoBehaviour
 {
     public string folderPath = @"C:/Users/zhiyuan/Desktop/house_plans";
@@ -130,13 +130,18 @@ public class JsonReader : MonoBehaviour
                 }
             }
 
-            //convert to z up and right handed system 
-            Quaternion worldRotation = Quaternion.Euler(-90, 0, 0);
-            worldGO.transform.localRotation = worldRotation * worldGO.transform.localRotation;
+            foreach (var obj in house.objects) {
+                AdjustChildrenPositions(obj);
+            }
 
-            Vector3 worldScale = worldGO.transform.localScale;
-            worldScale.z *= -1;
-            worldGO.transform.localScale = worldScale;
+
+            //convert to z up and right handed system 
+            // Quaternion worldRotation = Quaternion.Euler(-90, 0, 0);
+            // worldGO.transform.localRotation = worldRotation * worldGO.transform.localRotation;
+
+            // Vector3 worldScale = worldGO.transform.localScale;
+            // worldScale.z *= -1;
+            // worldGO.transform.localScale = worldScale;
             
             string subfolder = Path.GetFileNameWithoutExtension(jsonFilePath);
             string fileName = "house_" + subfolder;
@@ -150,10 +155,19 @@ public class JsonReader : MonoBehaviour
             // Initialize the export scene
             var scene = ExportHelpers.InitForSave(outputPath);
 
+            // test 
+            GameObject targetObject = GameObject.Find("Vase|surface|6|22");
+            if (targetObject != null)
+            {
+                // 获取对象的坐标
+                Vector3 position = targetObject.transform.position;
+                Debug.Log("Target Object Position: " + position.ToString("F6"));
+            }
+
             // Export selected game objects
             ExportHelpers.ExportGameObjects(new GameObject[] {worldGO}, scene, BasisTransformation.SlowAndSafe);
             // delete the world
-            DestroyImmediate(worldGO);
+            // DestroyImmediate(worldGO);
         }     
         Debug.Log("finished!"); 
 
@@ -950,6 +964,89 @@ public class JsonReader : MonoBehaviour
     //         }
     //     }
     // }
+    public static void AdjustChildrenPositions(
+        HouseObject houseObject
+    ) {
+        if (houseObject == null) {
+            return;
+        }
+
+        // 检查 houseObject 是否有子对象
+        if (houseObject.children != null && houseObject.children.Count > 0) {
+            // 获取当前对象
+            var parentGO = GameObject.Find(houseObject.id); // 根据 id 查找已生成的 GameObject
+            if (parentGO == null) {
+                Debug.LogError($"Parent object {houseObject.id} not found in the scene.");
+                return;
+            }
+            // 在子对象中查找 ReceptacleTriggerBox
+            var receptacleTriggerBoxGO = parentGO.transform.Find("ReceptacleTriggerBox") ??
+                                        parentGO.transform.Find("ReceptacleTriggerBox (1)") ??
+                                        parentGO.transform.Find("ReceptacleTriggerBox (2)");
+
+            if (receptacleTriggerBoxGO == null) {
+                Debug.LogError($"ReceptacleTriggerBox not found in {houseObject.id}'s children.");
+                return;
+            }
+
+            var receptacleCollider = receptacleTriggerBoxGO.GetComponent<BoxCollider>();
+            if (receptacleCollider == null) {
+                Debug.LogError($"ReceptacleTriggerBox {houseObject.id} does not have a BoxCollider component.");
+                return;
+            }
+
+            float bottomY = receptacleCollider.bounds.min.y;
+
+            foreach (var child in houseObject.children) {
+                // 处理子对象位置
+                ProcessChildPosition(child, bottomY);
+
+                // 递归调用 AdjustChildrenPositions 处理子对象的子对象
+                AdjustChildrenPositions(child);
+            }
+        }
+    }
+
+    // 处理子对象的位置
+    private static void ProcessChildPosition(HouseObject child, float parentBottomY) {
+        // 获取子对象
+        var childGO = GameObject.Find(child.id);
+        if (childGO == null) {
+            Debug.LogError($"Child object {child.id} not found in the scene.");
+            return;
+        }
+
+        // 在子对象中查找 BoundingBox
+        var boundingBoxGO = childGO.transform.Find("BoundingBox");
+        if (boundingBoxGO == null) {
+            Debug.LogError($"BoundingBox not found in {child.id}'s children.");
+            return;
+        }
+
+        var boundingBoxCollider = boundingBoxGO.GetComponent<BoxCollider>();
+        if (boundingBoxCollider == null) {
+            Debug.LogError($"BoundingBox {child.id} does not have a BoxCollider component.");
+            return;
+        }
+
+        // 计算子对象的底面高度
+        float childHeight = childGO.transform.position.y;
+        float boundingBoxCenterY = boundingBoxCollider.center.y;
+        float boundingBoxSizeY = boundingBoxCollider.size.y;
+        float childBottomY = childHeight + boundingBoxCenterY - (boundingBoxSizeY / 2);
+
+        // 计算向下移动的距离
+        float distanceToMove = childBottomY - parentBottomY;
+
+        // 调整子对象的位置
+        childGO.transform.position = new Vector3(
+            childGO.transform.position.x,
+            childGO.transform.position.y - distanceToMove,
+            childGO.transform.position.z
+        );
+
+        Debug.Log($"Moved child object {child.id} to contact ReceptacleTriggerBox bottom.");
+    }
 
 
     private static GameObject createCeilingGameObject(ProceduralHouse house, IEnumerable<Wall> walls, Dictionary<string, UnityEngine.Object> assetMap) {
